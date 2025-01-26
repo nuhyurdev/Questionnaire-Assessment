@@ -1,0 +1,172 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"name":"csharp"}]}}
+
+#!markdown
+
+## Install Dependencies
+
+#!csharp
+
+#r "nuget: CsvHelper"
+#r "nuget: Microsoft.Data.Analysis"
+
+#!markdown
+
+## Imports && Define Classes
+
+#!csharp
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using CsvHelper;
+using CsvHelper.Configuration;
+using Microsoft.Data.Analysis;
+// Define a class to represent a row in the CSV file
+public class PlayRecord
+{
+    public string PLAY_ID { get; set; }
+    public int SONG_ID { get; set; }
+    public int CLIENT_ID { get; set; }
+    public DateTime PLAY_TS { get; set; }
+}
+
+// Define a class to represent the output result
+public class DistinctPlayCountResult
+{
+    public int DISTINCT_PLAY_COUNT { get; set; }
+    public int CLIENT_COUNT { get; set; }
+}
+
+#!markdown
+
+## read csv Data
+
+#!csharp
+
+// Read the CSV file
+var csvFilePath = "./exhibitA-input.csv"; 
+var reader = new StreamReader(csvFilePath);
+var csv = new CsvReader(reader, new CsvConfiguration(CultureInfo.InvariantCulture)
+{
+    Delimiter = "\t"
+});
+
+// Parse the CSV file into a list of PlayRecord objects
+var records = csv.GetRecords<PlayRecord>().ToList();
+
+#!csharp
+
+Console.WriteLine($"Read {records.Count} records from the CSV file.");
+
+#!markdown
+
+## Make it DataFrame
+
+#!csharp
+
+var playidcol = new StringDataFrameColumn("PLAY_ID");
+var songidcol = new PrimitiveDataFrameColumn<int>("SONG_ID");
+var clientidcol = new PrimitiveDataFrameColumn<int>("CLIENT_ID");
+var playtscol = new PrimitiveDataFrameColumn<DateTime>("PLAY_TS");
+
+foreach (var record in records)
+{
+    playidcol.Append(record.PLAY_ID);
+    songidcol.Append(record.SONG_ID);
+    clientidcol.Append(record.CLIENT_ID);
+    playtscol.Append(record.PLAY_TS);
+}
+var DataFrame = new DataFrame(playidcol, songidcol, clientidcol, playtscol);
+DataFrame.Head(5).Display();
+
+#!csharp
+
+DataFrame.Description().Display();
+
+#!markdown
+
+## PlayCount and client count analysis
+
+#!csharp
+
+var targetDate = new DateTime(2016, 10, 8);
+var filteredRecords = records
+    .Where(r => r.PLAY_TS.Date == targetDate)
+    .ToList();
+
+// Group by CLIENT_ID and count distinct SONG_ID for each client
+var clientDistinctSongCounts = filteredRecords
+    .GroupBy(r => r.CLIENT_ID)
+    .Select(g => new
+    {
+        CLIENT_ID = g.Key,
+        DISTINCT_SONG_COUNT = g.Select(r => r.SONG_ID).Distinct().Count()
+    })
+    .ToList();
+
+// Group by DISTINCT_SONG_COUNT and count the number of clients
+var result = clientDistinctSongCounts
+    .GroupBy(c => c.DISTINCT_SONG_COUNT)
+    .Select(g => new
+    {
+        DISTINCT_PLAY_COUNT = g.Key,
+        CLIENT_COUNT = g.Count()
+    })
+    .OrderBy(r => r.DISTINCT_PLAY_COUNT)
+    .ToList();
+
+// Create a DataFrame
+var distinctPlayCountColumn = new PrimitiveDataFrameColumn<int>("DISTINCT_PLAY_COUNT");
+var clientCountColumn = new PrimitiveDataFrameColumn<int>("CLIENT_COUNT");
+
+foreach (var item in result)
+{
+    distinctPlayCountColumn.Append(item.DISTINCT_PLAY_COUNT);
+    clientCountColumn.Append(item.CLIENT_COUNT);
+}
+
+var dataFrame = new DataFrame(distinctPlayCountColumn, clientCountColumn);
+
+dataFrame.Display();
+
+#!markdown
+
+## Save as csv
+
+#!csharp
+
+public static void SaveDataFrameToCsv(DataFrame dataFrame, string filePath, char delimiter)
+{
+    using var writer = new StreamWriter(filePath);
+
+    // Write the header
+    var header = string.Join(delimiter, dataFrame.Columns.Select(c => c.Name));
+    writer.WriteLine(header);
+
+    // Write the rows
+    for (long i = 0; i < dataFrame.Rows.Count; i++)
+    {
+        var row = dataFrame.Rows[i];
+        var rowValues = new List<string>();
+
+        for (int j = 0; j < dataFrame.Columns.Count; j++)
+        {
+            rowValues.Add(row[j]?.ToString() ?? string.Empty);
+        }
+
+        var line = string.Join(delimiter, rowValues);
+        writer.WriteLine(line);
+    }
+}
+
+#!csharp
+
+// Save the DataFrame to a tab-delimited CSV file
+var outputFilePath = "./output.csv";
+SaveDataFrameToCsv(dataFrame, outputFilePath, '\t'); // Use tab as the delimiter
+
+Console.WriteLine($"\nDataFrame saved to {outputFilePath}");
